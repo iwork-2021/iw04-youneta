@@ -27,6 +27,9 @@
 /// THE SOFTWARE.
 
 import UIKit
+import CoreMedia
+import CoreML
+import Vision
 
 class ViewController: UIViewController {
   
@@ -38,7 +41,24 @@ class ViewController: UIViewController {
   @IBOutlet var resultsConstraint: NSLayoutConstraint!
 
   var firstTime = true
-
+  lazy var classificationRequest: VNCoreMLRequest = {
+      do{
+          let classifier = try HealthySnacks(configuration: MLModelConfiguration())
+          
+          let model = try VNCoreMLModel(for: classifier.model)
+          let request = VNCoreMLRequest(model: model, completionHandler: {
+              [weak self] request,error in
+              self?.processObservations(for: request, error: error)
+          })
+          request.imageCropAndScaleOption = .centerCrop
+          return request
+          
+          
+      } catch {
+          fatalError("Failed to create request")
+      }
+  }()
+    
   override func viewDidLoad() {
     super.viewDidLoad()
     cameraButton.isEnabled = UIImagePickerController.isSourceTypeAvailable(.camera)
@@ -96,6 +116,17 @@ class ViewController: UIViewController {
   }
 
   func classify(image: UIImage) {
+    guard let imageCI = CIImage(image: image)
+    else { return }
+    let orientation = CGImagePropertyOrientation(image.imageOrientation)
+    DispatchQueue.main.async {
+      let handler = VNImageRequestHandler(ciImage: imageCI, orientation: orientation, options: [:] )
+      do {
+        try handler.perform([self.classificationRequest])
+      } catch {
+        print("Failed to perform classification: \(error)")
+      }
+    }
   }
 }
 
@@ -103,9 +134,34 @@ extension ViewController: UIImagePickerControllerDelegate, UINavigationControlle
   func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
     picker.dismiss(animated: true)
 
-	let image = info[.originalImage] as! UIImage
+    let image = info[.originalImage] as! UIImage
     imageView.image = image
-
+    imageView.contentMode = .scaleAspectFit
     classify(image: image)
+  }
+}
+
+extension ViewController {
+  func processObservations(for request: VNRequest, error: Error?) {
+    if let results = request.results as? [VNClassificationObservation] {
+      if results.isEmpty {
+        self.resultsLabel.text = "Nothing found"
+      } else {
+        let result = results[0].identifier
+        let confidence = results[0].confidence
+        if confidence * 100 < 60 {
+          self.resultsLabel.text = "I'm not sure.Perhaps it's not a food."
+        }
+        else {
+          self.resultsLabel.text = result.appendingFormat(", confidence: %.1f%%", confidence * 100)
+        }
+        self.showResultsView()
+        print(result)
+      }
+    } else if let error = error {
+      self.resultsLabel.text = "Error: \(error.localizedDescription)"
+    } else {
+      self.resultsLabel.text = "???"
+    }
   }
 }
